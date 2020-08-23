@@ -1,0 +1,14 @@
+
+
+[notion]
+# Obtain the `token_v2` value by inspecting your browser cookies on a logged-in session on Notion.so
+token_v2 = ""
+# Notion videos/songs Database Link
+notion_database_link = ""
+
+[youtube]
+# youtube playlist id
+playlist_id = ""
+# download client secrets file from console.developers.google.com -> credentials
+client_secrets_file = "client_secret.json"
+api_key = ""

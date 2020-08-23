@@ -129,7 +129,7 @@ dmypy.json
 .pyre/
 
 #
+.DS_Store
 client_secret.json
-input.json
 output.json
-notion-api.cfg
+notion-youtube.toml

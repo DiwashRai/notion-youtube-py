@@ -1,51 +1,96 @@
 
+from notion.client import NotionClient
+
 import google_auth_oauthlib.flow
 import googleapiclient.discovery
 import googleapiclient.errors
+
+import toml
 import json
 
-from notion.client import NotionClient
+import time
 
-# Obtain the `token_v2` value by inspecting your browser cookies on a logged-in session on Notion.so
-client = NotionClient("token_v2=your-token-v2-here")
+# config toml file
+config_file = "notion-youtube.toml"
 
-# Notion Songs Database Link
-cv = client.get_collection_view("your-youtube-videos-notion-database-link-here")
+_config = {
+    "token_v2": "",
+    "notion_database_link": "",
+    "api_service_name": "youtube",
+    "api_version": "v3",
+    "playlist_id" : "",
+    "client_secrets_file": "",
+    "scopes": ["https://www.googleapis.com/auth/youtube.force-ssl"]
+}
 
-# Notion automated YouTube playlist id
-playlist_id = "your-youtube-playlist-id-here"
+def parse_toml():
+    config = toml.load(config_file)
+    for section in config:
+        for name, value in config[section].items():
+            _config[name] = value
 
-def get_video_ids():
-    video_ids = []
+
+def get_notion_video_ids():
+    client = NotionClient(_config["token_v2"])
+    cv = client.get_collection_view(_config["notion_database_link"])
+
+    video_ids = set()
     for row in cv.collection.get_rows():
         if row.feeling_it:
-            video_ids.append(row.youtube.split("v=")[1])
+            video_ids.add(row.youtube.split("v=")[1])
     return video_ids
 
 
-def main():
-    client_secrts_file = "client_secret.json"
-    scopes =["https://www.googleapis.com/auth/youtube.force-ssl"]
-    api_service_name = "youtube"
-    api_version = "v3"
+def request_playlist_items_json():
+    youtube = googleapiclient.discovery.build(
+        _config["api_service_name"], _config["api_version"], developerKey=_config["api_key"]
+        )
 
-    # OAuth credentials
+    request = youtube.playlistItems().list(
+        part="contentDetails",
+        maxResults=50,
+        playlistId=_config["playlist_id"]
+        )
+    response = request.execute()
+    return response
+
+def json_to_file(response):
+    text_file = open("output.json", "w")
+    text_file.write(json.dumps(response, sort_keys=True, indent=2))
+    text_file.close()
+
+
+def get_youtube_video_ids(playlist_items_json):
+    id_set = set()
+    for item in playlist_items_json["items"]:
+        id_set.add(item["contentDetails"]["videoId"])
+
+    return id_set
+
+
+def get_service_with_credentials():
     flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file(
-        client_secrts_file, scopes)
+        _config["client_secrets_file"], _config["scopes"])
     credentials = flow.run_local_server()
 
-    # Get service
     youtube = googleapiclient.discovery.build(
-        api_service_name, api_version, credentials=credentials)
+        _config["api_service_name"], _config["api_version"], credentials=credentials
+        )
+    return youtube
 
-    # insert videos from database into playlist
-    video_id_list = get_video_ids()
-    for video_id in video_id_list:
+
+def insert_videos(youtube, id_list):
+    print("Inserting...")
+    if len(id_list) == 0:
+        print("No videos to add to playlist")
+        return
+
+    for video_id in id_list:
         request = youtube.playlistItems().insert(
             part="snippet",
             body={
                 "snippet": {
-                    "playlistId": playlist_id,
+                    "playlistId": _config["playlist_id"],
                     "position": 0,
                     "resourceId": {
                         "kind": "youtube#video",
@@ -53,7 +98,52 @@ def main():
                     }
                 }
             }
-        ).execute()
+        )
+        request.execute()
+        time.sleep(0.2) # No delay was causing some videos to be missed
+
+
+def delete_videos(youtube, video_id_list, playlist_item_id_dict):
+    print("Deleting...")
+    if len(video_id_list)  == 0:
+        print("No videos to delete from playlist")
+        return
+
+    for video_id in video_id_list:
+        request = youtube.playlistItems().delete(
+            id=playlist_item_id_dict[video_id]
+            )
+        request.execute()
+        time.sleep(0.2) # No delay was causing some videos to be missed
+
+
+
+
+def main():
+    parse_toml()
+    response = request_playlist_items_json()
+    # json_to_file(response) # uncomment to see youtube response of playlist info
+
+    notion_video_id_set = get_notion_video_ids()
+    youtube_video_id_set = get_youtube_video_ids(response)
+
+    insert_video_id_list = list(notion_video_id_set - youtube_video_id_set)
+    delete_video_id_list = list(youtube_video_id_set - notion_video_id_set)
+    playlist_item_id_dict = {}
+    for item in response["items"]:
+        playlist_item_id_dict[item["contentDetails"]["videoId"]] = item["id"]
+
+    if len(insert_video_id_list) == 0 and len(delete_video_id_list) == 0:
+        print("playlist already in sync. Returning...")
+        return
+
+    youtube = get_service_with_credentials()
+
+    insert_videos(youtube, insert_video_id_list)
+    delete_videos(youtube, delete_video_id_list, playlist_item_id_dict)
+
+    print("playlist now in sync.")
+
 
 if __name__ == "__main__":
     main()
